@@ -1,0 +1,7 @@
+package wasi-gfx:webgpu-headers;
+
+world imports {
+    include wasi:webgpu/imports@0.0.1;
+    include wasi:surface/imports@0.0.1;
+    include wasi:graphics-context/imports@0.0.1;
+}
