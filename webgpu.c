@@ -7,6 +7,7 @@
 
 typedef struct WGPUAdapterImpl {
     wasi_webgpu_webgpu_own_gpu_adapter_t adapter;
+    uint32_t refCount;
 } WGPUAdapterImpl;
 // typedef struct WGPUBindGroupImpl {
 // } WGPUBindGroupImpl;
@@ -24,9 +25,11 @@ typedef struct WGPUAdapterImpl {
 // } WGPUComputePipelineImpl;
 typedef struct WGPUDeviceImpl {
     wasi_webgpu_webgpu_own_gpu_device_t device;
+    uint32_t refCount;
 } WGPUDeviceImpl;
 typedef struct WGPUInstanceImpl {
     wasi_webgpu_webgpu_own_gpu_t gpu;
+    uint32_t refCount;
 } WGPUInstanceImpl;
 // typedef struct WGPUPipelineLayoutImpl {
 // } WGPUPipelineLayoutImpl;
@@ -56,6 +59,7 @@ typedef struct WGPUInstanceImpl {
 WGPUInstance wgpuCreateInstance(WGPUInstanceDescriptor const* descriptor)
 {
     WGPUInstanceImpl* instance = malloc(sizeof(WGPUInstanceImpl));
+    instance->refCount = 1;
     instance->gpu = wasi_webgpu_webgpu_get_gpu();
     return instance;
 }
@@ -130,6 +134,7 @@ WGPUFuture wgpuAdapterRequestDevice(WGPUAdapter adapter, WGPUDeviceDescriptor co
     );
 
     WGPUDeviceImpl * device = malloc(sizeof(WGPUDeviceImpl));
+    device->refCount = 1;
     device->device = dev;
 
     WGPURequestDeviceCallback callback = callbackInfo.callback;
@@ -137,13 +142,19 @@ WGPUFuture wgpuAdapterRequestDevice(WGPUAdapter adapter, WGPUDeviceDescriptor co
     return (WGPUFuture) { .id = -1 };
 }
 
-// void wgpuAdapterAddRef(WGPUAdapter adapter)
-// {
-// }
+void wgpuAdapterAddRef(WGPUAdapter adapter)
+{
+    adapter->refCount ++;
+}
 
-// void wgpuAdapterRelease(WGPUAdapter adapter)
-// {
-// }
+void wgpuAdapterRelease(WGPUAdapter adapter)
+{
+    adapter->refCount --;
+    if(adapter->refCount < 1)
+    {
+        free(adapter);
+    }
+}
 
 // void wgpuAdapterInfoFreeMembers(WGPUAdapterInfo adapterInfo)
 // {
@@ -456,13 +467,19 @@ WGPUFuture wgpuAdapterRequestDevice(WGPUAdapter adapter, WGPUDeviceDescriptor co
 // {
 // }
 
-// void wgpuDeviceAddRef(WGPUDevice device)
-// {
-// }
+void wgpuDeviceAddRef(WGPUDevice device)
+{
+    device->refCount ++;
+}
 
-// void wgpuDeviceRelease(WGPUDevice device)
-// {
-// }
+void wgpuDeviceRelease(WGPUDevice device)
+{
+    device->refCount --;
+    if(device->refCount < 1)
+    {
+        free(device);
+    }
+}
 
 // WGPUSurface wgpuInstanceCreateSurface(WGPUInstance instance, WGPUSurfaceDescriptor const* descriptor)
 // {
@@ -489,6 +506,7 @@ WGPUFuture wgpuInstanceRequestAdapter(WGPUInstance instance, WGPURequestAdapterO
     );
 
     WGPUAdapterImpl * adapter = malloc(sizeof(WGPUAdapterImpl));
+    adapter->refCount = 1;
     adapter->adapter = wasi_adapter;
 
     callbackInfo.callback(WGPURequestAdapterStatus_Success, adapter, NULL, NULL, NULL);
@@ -500,13 +518,19 @@ WGPUFuture wgpuInstanceRequestAdapter(WGPUInstance instance, WGPURequestAdapterO
 // {
 // }
 
-// void wgpuInstanceAddRef(WGPUInstance instance)
-// {
-// }
+void wgpuInstanceAddRef(WGPUInstance instance)
+{
+    instance->refCount ++;
+}
 
-// void wgpuInstanceRelease(WGPUInstance instance)
-// {
-// }
+void wgpuInstanceRelease(WGPUInstance instance)
+{
+    instance->refCount --;
+    if(instance->refCount < 1)
+    {
+        free(instance);
+    }
+}
 
 // void wgpuPipelineLayoutSetLabel(WGPUPipelineLayout pipelineLayout, char const* label)
 // {
