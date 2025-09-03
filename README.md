@@ -10,3 +10,12 @@ wit-deps
 ```shell
 make generate-bindings
 ```
+
+## Build an example
+```shell
+make build-example example=[example]
+```
+
+### Available examples
+- hello-triangle
+- hello-compute
