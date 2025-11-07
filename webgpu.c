@@ -937,6 +937,9 @@ WGPUQueue wgpuDeviceGetQueue(WGPUDevice device)
 
 WGPUBool wgpuDeviceHasFeature(WGPUDevice device, WGPUFeatureName feature)
 {
+    if (feature == WGPUFeatureName_ShaderF16) {
+        return true;
+    }
     return false;
 }
 
