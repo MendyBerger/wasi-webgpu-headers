@@ -82,6 +82,9 @@ typedef struct WGPUShaderModuleImpl {
 // typedef struct WGPUTextureViewImpl {
 // } WGPUTextureViewImpl;
 
+wasi_webgpu_webgpu_gpu_feature_name_t featureNativeToWasi(WGPUFeatureName const * feature);
+WGPUFeatureName featureWasiToNative(wasi_webgpu_webgpu_gpu_feature_name_t const * feature);
+
 WGPUInstance wgpuCreateInstance(WGPUInstanceDescriptor const* descriptor)
 {
     WGPUInstanceImpl* instance = (WGPUInstanceImpl*)malloc(sizeof(WGPUInstanceImpl));
@@ -155,6 +158,20 @@ WGPUFuture wgpuAdapterRequestDevice(WGPUAdapter adapter, WGPUDeviceDescriptor co
         // ...
 
         wasi_webgpu_webgpu_record_option_gpu_size64_drop_own(descriptor_impl.required_limits.val);
+    }
+
+    if (descriptor->requiredFeatures) // TODO: Not nullable so should we remove this check?
+    {
+        descriptor_impl.required_features.is_some = true;
+        descriptor_impl.required_features.val = (wasi_webgpu_webgpu_list_gpu_feature_name_t){
+            .ptr = malloc(descriptor->requiredFeatureCount * sizeof(wasi_webgpu_webgpu_gpu_feature_name_t)),
+            .len = descriptor->requiredFeatureCount,
+        };
+        
+        for (size_t i = 0; i < descriptor->requiredFeatureCount; i++)
+        {
+            descriptor_impl.required_features.val.ptr[i] = featureNativeToWasi(&descriptor->requiredFeatures[i]);
+        }
     }
 
     wasi_webgpu_webgpu_own_gpu_device_t dev;
@@ -867,7 +884,7 @@ WGPUShaderModule wgpuDeviceCreateShaderModule(WGPUDevice device, WGPUShaderModul
     }
 
     imports_string_t code = {
-        .ptr = wgsl_source->code.data,
+        .ptr = (uint8_t*)wgsl_source->code.data,
         // .len = wgsl_source->code.length
         .len = strlen(wgsl_source->code.data)
     };
@@ -937,6 +954,14 @@ WGPUQueue wgpuDeviceGetQueue(WGPUDevice device)
 
 WGPUBool wgpuDeviceHasFeature(WGPUDevice device, WGPUFeatureName feature)
 {
+    // wasi_webgpu_webgpu_gpu_feature_name_t requested_feature = featureNativeToWasi(&feature);
+    // wasi_webgpu_webgpu_own_gpu_supported_features_t available_features = wasi_webgpu_webgpu_method_gpu_device_features(
+    //     wasi_webgpu_webgpu_borrow_gpu_device(device->device)
+    // );
+    // return wasi_webgpu_webgpu_method_gpu_supported_features_has(
+    //     wasi_webgpu_webgpu_borrow_gpu_supported_features(available_features),
+    //     featureNativeToWasi(&feature)
+    // );
     if (feature == WGPUFeatureName_ShaderF16) {
         return true;
     }
@@ -946,6 +971,7 @@ WGPUBool wgpuDeviceHasFeature(WGPUDevice device, WGPUFeatureName feature)
 WGPUFuture wgpuDevicePopErrorScope(WGPUDevice device, WGPUPopErrorScopeCallbackInfo callbackInfo)
 {
     // abort();
+    return (WGPUFuture) { .id = 1 };
 }
 
 void wgpuDevicePushErrorScope(WGPUDevice device, WGPUErrorFilter filter)
@@ -1551,4 +1577,88 @@ void wgpuTextureViewAddRef(WGPUTextureView textureView)
 void wgpuTextureViewRelease(WGPUTextureView textureView)
 {
     abort();
+}
+
+wasi_webgpu_webgpu_gpu_feature_name_t featureNativeToWasi(WGPUFeatureName const* feature)
+{
+    switch (*feature) {
+        case WGPUFeatureName_DepthClipControl:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_DEPTH_CLIP_CONTROL;
+        case WGPUFeatureName_Depth32FloatStencil8:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_DEPTH32FLOAT_STENCIL8;
+        case WGPUFeatureName_TextureCompressionBC:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_TEXTURE_COMPRESSION_BC;
+        case WGPUFeatureName_TextureCompressionBCSliced3D:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_TEXTURE_COMPRESSION_BC_SLICED3D;
+        case WGPUFeatureName_TextureCompressionETC2:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_TEXTURE_COMPRESSION_ETC2;
+        case WGPUFeatureName_TextureCompressionASTC:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_TEXTURE_COMPRESSION_ASTC;
+        case WGPUFeatureName_TextureCompressionASTCSliced3D:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_TEXTURE_COMPRESSION_ASTC_SLICED3D;
+        case WGPUFeatureName_TimestampQuery:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_TIMESTAMP_QUERY;
+        case WGPUFeatureName_IndirectFirstInstance:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_INDIRECT_FIRST_INSTANCE;
+        case WGPUFeatureName_ShaderF16:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_SHADER_F16;
+        case WGPUFeatureName_RG11B10UfloatRenderable:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_RG11B10UFLOAT_RENDERABLE;
+        case WGPUFeatureName_BGRA8UnormStorage:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_BGRA8UNORM_STORAGE;
+        case WGPUFeatureName_Float32Filterable:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_FLOAT32_FILTERABLE;
+        case WGPUFeatureName_Float32Blendable:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_FLOAT32_BLENDABLE;
+        case WGPUFeatureName_ClipDistances:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_CLIP_DISTANCES;
+        case WGPUFeatureName_DualSourceBlending:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_DUAL_SOURCE_BLENDING;
+        case WGPUFeatureName_Subgroups:
+            return WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_SUBGROUPS;
+        default:
+            abort(); // TODO:
+    }
+}
+
+WGPUFeatureName featureWasiToNative(wasi_webgpu_webgpu_gpu_feature_name_t const* feature)
+{
+    switch (*feature) {
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_DEPTH_CLIP_CONTROL:
+            return WGPUFeatureName_DepthClipControl;
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_DEPTH32FLOAT_STENCIL8:
+            return WGPUFeatureName_Depth32FloatStencil8;
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_TEXTURE_COMPRESSION_BC:
+            return WGPUFeatureName_TextureCompressionBC;
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_TEXTURE_COMPRESSION_BC_SLICED3D:
+            return WGPUFeatureName_TextureCompressionBCSliced3D;
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_TEXTURE_COMPRESSION_ETC2:
+            return WGPUFeatureName_TextureCompressionETC2;
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_TEXTURE_COMPRESSION_ASTC:
+            return WGPUFeatureName_TextureCompressionASTC;
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_TEXTURE_COMPRESSION_ASTC_SLICED3D:
+            return WGPUFeatureName_TextureCompressionASTCSliced3D;
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_TIMESTAMP_QUERY:
+            return WGPUFeatureName_TimestampQuery;
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_INDIRECT_FIRST_INSTANCE:
+            return WGPUFeatureName_IndirectFirstInstance;
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_SHADER_F16:
+            return WGPUFeatureName_ShaderF16;
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_RG11B10UFLOAT_RENDERABLE:
+            return WGPUFeatureName_RG11B10UfloatRenderable;
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_BGRA8UNORM_STORAGE:
+            return WGPUFeatureName_BGRA8UnormStorage;
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_FLOAT32_FILTERABLE:
+            return WGPUFeatureName_Float32Filterable;
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_FLOAT32_BLENDABLE:
+            return WGPUFeatureName_Float32Blendable;
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_CLIP_DISTANCES:
+            return WGPUFeatureName_ClipDistances;
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_DUAL_SOURCE_BLENDING:
+            return WGPUFeatureName_DualSourceBlending;
+        case WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_SUBGROUPS:
+            return WGPUFeatureName_Subgroups;
+        default:
+            return WGPUFeatureName_Undefined;
+    }
 }
