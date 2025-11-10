@@ -174,7 +174,7 @@ WGPUFuture wgpuAdapterRequestDevice(WGPUAdapter adapter, WGPUDeviceDescriptor co
     //     }
     // }
 
-    // descriptor_impl.required_features.is_some = true;
+    descriptor_impl.required_features.is_some = true;
 
 
     descriptor_impl.required_features.val = (wasi_webgpu_webgpu_list_gpu_feature_name_t){
