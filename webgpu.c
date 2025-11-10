@@ -189,7 +189,8 @@ WGPUFuture wgpuAdapterRequestDevice(WGPUAdapter adapter, WGPUDeviceDescriptor co
     wasi_webgpu_webgpu_request_device_error_t err;
     bool success = wasi_webgpu_webgpu_method_gpu_adapter_request_device(
         wasi_webgpu_webgpu_borrow_gpu_adapter(adapter->adapter),
-        descriptor ? &descriptor_impl : NULL,
+        // descriptor ? &descriptor_impl : NULL,
+        &descriptor_impl,
         &dev,
         &err
     );
