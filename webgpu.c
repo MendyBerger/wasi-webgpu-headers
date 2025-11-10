@@ -160,19 +160,30 @@ WGPUFuture wgpuAdapterRequestDevice(WGPUAdapter adapter, WGPUDeviceDescriptor co
         wasi_webgpu_webgpu_record_option_gpu_size64_drop_own(descriptor_impl.required_limits.val);
     }
 
-    if (descriptor->requiredFeatures) // TODO: Not nullable so should we remove this check?
-    {
-        descriptor_impl.required_features.is_some = true;
-        descriptor_impl.required_features.val = (wasi_webgpu_webgpu_list_gpu_feature_name_t){
-            .ptr = malloc(descriptor->requiredFeatureCount * sizeof(wasi_webgpu_webgpu_gpu_feature_name_t)),
-            .len = descriptor->requiredFeatureCount,
-        };
+    // if (descriptor->requiredFeatures) // TODO: Not nullable so should we remove this check?
+    // {
+    //     descriptor_impl.required_features.is_some = true;
+    //     descriptor_impl.required_features.val = (wasi_webgpu_webgpu_list_gpu_feature_name_t){
+    //         .ptr = malloc(descriptor->requiredFeatureCount * sizeof(wasi_webgpu_webgpu_gpu_feature_name_t)),
+    //         .len = descriptor->requiredFeatureCount,
+    //     };
         
-        for (size_t i = 0; i < descriptor->requiredFeatureCount; i++)
-        {
-            descriptor_impl.required_features.val.ptr[i] = featureNativeToWasi(&descriptor->requiredFeatures[i]);
-        }
-    }
+    //     for (size_t i = 0; i < descriptor->requiredFeatureCount; i++)
+    //     {
+    //         descriptor_impl.required_features.val.ptr[i] = featureNativeToWasi(&descriptor->requiredFeatures[i]);
+    //     }
+    // }
+
+    // descriptor_impl.required_features.is_some = true;
+
+
+    descriptor_impl.required_features.val = (wasi_webgpu_webgpu_list_gpu_feature_name_t){
+        .ptr = (wasi_webgpu_webgpu_gpu_feature_name_t*)malloc(sizeof(wasi_webgpu_webgpu_gpu_feature_name_t)),
+        .len = 1,
+    };
+
+    descriptor_impl.required_features.val.ptr[0] = WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_SHADER_F16;
+
 
     wasi_webgpu_webgpu_own_gpu_device_t dev;
     wasi_webgpu_webgpu_request_device_error_t err;
