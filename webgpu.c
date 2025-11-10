@@ -126,71 +126,42 @@ WGPUBool wgpuAdapterHasFeature(WGPUAdapter adapter, WGPUFeatureName feature)
 
 WGPUFuture wgpuAdapterRequestDevice(WGPUAdapter adapter, WGPUDeviceDescriptor const* descriptor, WGPURequestDeviceCallbackInfo callbackInfo)
 {
-    wasi_webgpu_webgpu_gpu_device_descriptor_t descriptor_impl = {};
-
-    // This is stubbed out - there are a signficiant number of options yet to be supported
-
-    if (descriptor->requiredLimits)
-    {
-        WGPULimits const* limits = descriptor->requiredLimits;
-
-        descriptor_impl.required_limits.is_some = true;
-        descriptor_impl.required_limits.val = wasi_webgpu_webgpu_constructor_record_option_gpu_size64();
-        wasi_webgpu_webgpu_borrow_record_option_gpu_size64_t limits_ref =
-            wasi_webgpu_webgpu_borrow_record_option_gpu_size64(descriptor_impl.required_limits.val);
-
-        if (limits->maxBindGroups)
-        {
-            imports_string_t str = {};
-            str.ptr = (uint8_t*)"maxBindGroups";
-            str.len = strlen((char*)str.ptr);
-            uint64_t maxBindGroups = limits->maxBindGroups;
-            wasi_webgpu_webgpu_method_record_option_gpu_size64_add(limits_ref, &str, &maxBindGroups);
-        }
-        if (limits->maxBindGroupsPlusVertexBuffers)
-        {
-            imports_string_t str = {};
-            str.ptr = (uint8_t*)"maxBindGroupsPlusVertexBuffers";
-            str.len = strlen((char*)str.ptr);
-            uint64_t maxBindGroupsPlusVertexBuffers = limits->maxBindGroupsPlusVertexBuffers;
-            wasi_webgpu_webgpu_method_record_option_gpu_size64_add(limits_ref, &str, &maxBindGroupsPlusVertexBuffers);
-        }
-        // ...
-
-        wasi_webgpu_webgpu_record_option_gpu_size64_drop_own(descriptor_impl.required_limits.val);
-    }
-
-    // if (descriptor->requiredFeatures) // TODO: Not nullable so should we remove this check?
-    // {
-    //     descriptor_impl.required_features.is_some = true;
-    //     descriptor_impl.required_features.val = (wasi_webgpu_webgpu_list_gpu_feature_name_t){
-    //         .ptr = malloc(descriptor->requiredFeatureCount * sizeof(wasi_webgpu_webgpu_gpu_feature_name_t)),
-    //         .len = descriptor->requiredFeatureCount,
-    //     };
-        
-    //     for (size_t i = 0; i < descriptor->requiredFeatureCount; i++)
-    //     {
-    //         descriptor_impl.required_features.val.ptr[i] = featureNativeToWasi(&descriptor->requiredFeatures[i]);
-    //     }
-    // }
-
-    descriptor_impl.required_features.is_some = true;
-
-
-    descriptor_impl.required_features.val = (wasi_webgpu_webgpu_list_gpu_feature_name_t){
-        .ptr = (wasi_webgpu_webgpu_gpu_feature_name_t*)malloc(sizeof(wasi_webgpu_webgpu_gpu_feature_name_t)),
-        .len = 1,
+    // Create a device descriptor with shader-f16 feature
+    wasi_webgpu_webgpu_gpu_feature_name_t shader_f16_feature = WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_SHADER_F16;
+    wasi_webgpu_webgpu_list_gpu_feature_name_t feature_list = {
+        .ptr = &shader_f16_feature,
+        .len = 1
     };
 
-    descriptor_impl.required_features.val.ptr[0] = WASI_WEBGPU_WEBGPU_GPU_FEATURE_NAME_SHADER_F16;
+    wasi_webgpu_webgpu_option_list_gpu_feature_name_t required_features = {
+        .is_some = true,
+        .val = feature_list
+    };
 
+    wasi_webgpu_webgpu_option_own_record_option_gpu_size64_t required_limits = {
+        .is_some = false
+    };
+
+    wasi_webgpu_webgpu_option_gpu_queue_descriptor_t default_queue = {
+        .is_some = false
+    };
+
+    imports_option_string_t label = {
+        .is_some = false
+    };
+
+    wasi_webgpu_webgpu_gpu_device_descriptor_t wasi_descriptor = {
+        .required_features = required_features,
+        .required_limits = required_limits,
+        .default_queue = default_queue,
+        .label = label
+    };
 
     wasi_webgpu_webgpu_own_gpu_device_t dev;
     wasi_webgpu_webgpu_request_device_error_t err;
     bool success = wasi_webgpu_webgpu_method_gpu_adapter_request_device(
         wasi_webgpu_webgpu_borrow_gpu_adapter(adapter->adapter),
-        // descriptor ? &descriptor_impl : NULL,
-        &descriptor_impl,
+        &wasi_descriptor,
         &dev,
         &err
     );
