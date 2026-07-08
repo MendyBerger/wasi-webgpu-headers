@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "imports.h"
+#include "async_futures.h"
 
 noreturn void todo() { abort(); }
 
@@ -113,6 +114,9 @@ static wasi_webgpu_webgpu_option_own_record_option_gpu_size64_t limitsNativeToWa
 static void limitsWasiToNative(wasi_webgpu_webgpu_own_gpu_supported_limits_t wasi_limits, WGPULimits* limits);
 static wasi_webgpu_webgpu_gpu_buffer_map_state_t bufferMapStateNativeToWasi(WGPUBufferMapState const bufferMapState);
 static WGPUBufferMapState bufferMapStateWasiToNative(wasi_webgpu_webgpu_gpu_buffer_map_state_t const buffer_map_state);
+static wasi_webgpu_webgpu_gpu_buffer_usage_t bufferUsageNativeToWasi(WGPUBufferUsage usage);
+static WGPUBufferUsage bufferUsageWasiToNative(wasi_webgpu_webgpu_gpu_buffer_usage_t wasi);
+static wasi_webgpu_webgpu_gpu_map_mode_t mapModeNativeToWasi(WGPUMapMode mode);
 
 WGPUInstance wgpuCreateInstance(WGPUInstanceDescriptor const* descriptor) {
     WGPUInstanceImpl* instance = malloc(sizeof(WGPUInstanceImpl));
@@ -161,6 +165,30 @@ WGPUBool wgpuAdapterHasFeature(WGPUAdapter adapter, WGPUFeatureName feature) {
     return has_feature;
 }
 
+typedef struct {
+    wasi_webgpu_webgpu_result_own_gpu_device_request_device_error_t result;
+    WGPURequestDeviceCallbackInfo cb;
+} RequestDeviceState;
+
+static void onRequestDeviceDone(void* userdata) {
+    RequestDeviceState* s = userdata;
+    WGPURequestDeviceCallbackInfo cb = s->cb;
+    if (s->result.is_err) {
+        wasi_webgpu_webgpu_request_device_error_t err = s->result.val.err;
+        WGPUStringView message = stringWasiToNative(&err.message);
+        cb.callback(WGPURequestDeviceStatus_Error, NULL, message, cb.userdata1, cb.userdata2);
+        free((void*)message.data);
+        wasi_webgpu_webgpu_request_device_error_free(&err);
+        return;
+    }
+
+    WGPUDeviceImpl* device = malloc(sizeof(WGPUDeviceImpl));
+    if (!device) oom();
+    device->refCount = 1;
+    device->device = s->result.val.ok;
+    cb.callback(WGPURequestDeviceStatus_Success, device, WGPU_STRING_VIEW_INIT, cb.userdata1, cb.userdata2);
+}
+
 WGPUFuture wgpuAdapterRequestDevice(
     WGPUAdapter adapter,
     WGPUDeviceDescriptor const* descriptor,
@@ -189,44 +217,18 @@ WGPUFuture wgpuAdapterRequestDevice(
         }
     }
 
-    wasi_webgpu_webgpu_own_gpu_device_t wasi_device;
-    wasi_webgpu_webgpu_request_device_error_t err;
-    bool success = wasi_webgpu_webgpu_method_gpu_adapter_request_device(
-        wasi_webgpu_webgpu_borrow_gpu_adapter(adapter->adapter),
-        descriptor ? &descriptor_wasi : NULL,
-        &wasi_device,
-        &err
-    );
+    RequestDeviceState* s = malloc(sizeof(RequestDeviceState));
+    if (!s) oom();
+    s->cb = callbackInfo;
+
+    wasi_webgpu_webgpu_method_gpu_adapter_request_device_args_t args = {
+        .self = wasi_webgpu_webgpu_borrow_gpu_adapter(adapter->adapter),
+        .descriptor = {.is_some = descriptor != NULL, .val = descriptor_wasi},
+    };
+    uint32_t status = wasi_webgpu_webgpu_method_gpu_adapter_request_device(&args, &s->result);
 
     wasi_webgpu_webgpu_gpu_device_descriptor_free(&descriptor_wasi);
-
-    if (!success) {
-        WGPUStringView request_device_error_message = stringWasiToNative(&err.message);
-        callbackInfo.callback(
-            WGPURequestDeviceStatus_Error,
-            NULL,
-            request_device_error_message,
-            callbackInfo.userdata1,
-            callbackInfo.userdata2
-        );
-        free((void*)request_device_error_message.data);
-        wasi_webgpu_webgpu_request_device_error_free(&err);
-        return (WGPUFuture){.id = 0};
-    }
-
-    WGPUDeviceImpl* device = malloc(sizeof(WGPUDeviceImpl));
-    if (!device) oom();
-    device->refCount = 1;
-    device->device = wasi_device;
-
-    callbackInfo.callback(
-        WGPURequestDeviceStatus_Success,
-        device,
-        WGPU_STRING_VIEW_INIT,
-        callbackInfo.userdata1,
-        callbackInfo.userdata2
-    );
-    return (WGPUFuture){.id = 0};
+    return (WGPUFuture){.id = async_register(status, &onRequestDeviceDone, s)};
 }
 
 void wgpuAdapterAddRef(WGPUAdapter adapter) {
@@ -344,9 +346,39 @@ uint64_t wgpuBufferGetSize(WGPUBuffer buffer) {
 
 WGPUBufferUsage wgpuBufferGetUsage(WGPUBuffer buffer) {
     if (!buffer) unreachable();
-    wasi_webgpu_webgpu_gpu_flags_constant_t usage =
+    wasi_webgpu_webgpu_gpu_buffer_usage_t usage =
         wasi_webgpu_webgpu_method_gpu_buffer_usage(wasi_webgpu_webgpu_borrow_gpu_buffer(buffer->buffer));
-    return usage;
+    return bufferUsageWasiToNative(usage);
+}
+
+typedef struct {
+    wasi_webgpu_webgpu_result_void_map_async_error_t result;
+    WGPUBufferMapCallbackInfo cb;
+} MapAsyncState;
+
+static void onMapAsyncDone(void* userdata) {
+    MapAsyncState* s = userdata;
+    WGPUBufferMapCallbackInfo cb = s->cb;
+    if (s->result.is_err) {
+        wasi_webgpu_webgpu_map_async_error_t err = s->result.val.err;
+        WGPUMapAsyncStatus status;
+        switch (err.kind.tag) {
+        case WASI_WEBGPU_WEBGPU_MAP_ASYNC_ERROR_KIND_ABORT_ERROR:
+            status = WGPUMapAsyncStatus_Aborted;
+            break;
+        // webgpu.h has no operation/range error variants; map them to a generic error
+        default:
+            status = WGPUMapAsyncStatus_Error;
+            break;
+        }
+        WGPUStringView message = stringWasiToNative(&err.message);
+        cb.callback(status, message, cb.userdata1, cb.userdata2);
+        free((void*)message.data);
+        wasi_webgpu_webgpu_map_async_error_free(&err);
+        return;
+    }
+
+    cb.callback(WGPUMapAsyncStatus_Success, WGPU_STRING_VIEW_INIT, cb.userdata1, cb.userdata2);
 }
 
 WGPUFuture wgpuBufferMapAsync(
@@ -358,56 +390,25 @@ WGPUFuture wgpuBufferMapAsync(
 ) {
     if (!buffer) unreachable();
 
-    wasi_webgpu_webgpu_gpu_map_mode_flags_t mode_wasi = (uint32_t)mode;
+    wasi_webgpu_webgpu_gpu_map_mode_t mode_wasi = mapModeNativeToWasi(mode);
     wasi_webgpu_webgpu_gpu_size64_t offset_wasi = (wasi_webgpu_webgpu_gpu_size64_t)offset;
     wasi_webgpu_webgpu_gpu_size64_t size_wasi = (wasi_webgpu_webgpu_gpu_size64_t)size;
     if (size == WGPU_WHOLE_MAP_SIZE) {
         size_wasi = wgpuBufferGetSize(buffer) - offset;
     }
 
-    wasi_webgpu_webgpu_map_async_error_t err;
-    bool success = wasi_webgpu_webgpu_method_gpu_buffer_map_async(
-        wasi_webgpu_webgpu_borrow_gpu_buffer(buffer->buffer),
-        mode_wasi,
-        &offset_wasi,
-        &size_wasi,
-        &err
-    );
+    MapAsyncState* s = malloc(sizeof(MapAsyncState));
+    if (!s) oom();
+    s->cb = callbackInfo;
 
-    if (!success) {
-        WGPUMapAsyncStatus status;
-        switch (err.kind.tag) {
-        case WASI_WEBGPU_WEBGPU_MAP_ASYNC_ERROR_KIND_OPERATION_ERROR:
-            // webgpu.h doesn't have operation errors
-            status = WGPUMapAsyncStatus_Error;
-            break;
-        case WASI_WEBGPU_WEBGPU_MAP_ASYNC_ERROR_KIND_RANGE_ERROR:
-            // webgpu.h doesn't have range errors
-            status = WGPUMapAsyncStatus_Error;
-            break;
-        case WASI_WEBGPU_WEBGPU_MAP_ASYNC_ERROR_KIND_ABORT_ERROR:
-            status = WGPUMapAsyncStatus_Aborted;
-            break;
-        default:
-            status = WGPUMapAsyncStatus_Error;
-            break;
-        }
-        WGPUStringView map_async_error_message = stringWasiToNative(&err.message);
-        callbackInfo.callback(
-            status,
-            map_async_error_message,
-            callbackInfo.userdata1,
-            callbackInfo.userdata2
-        );
-        free((void*)map_async_error_message.data);
-        wasi_webgpu_webgpu_map_async_error_free(&err);
-        return (WGPUFuture){.id = 0};
-    }
-
-    callbackInfo
-        .callback(WGPUMapAsyncStatus_Success, WGPU_STRING_VIEW_INIT, callbackInfo.userdata1, callbackInfo.userdata2);
-
-    return (WGPUFuture){.id = 0};
+    wasi_webgpu_webgpu_method_gpu_buffer_map_async_args_t args = {
+        .self = wasi_webgpu_webgpu_borrow_gpu_buffer(buffer->buffer),
+        .mode = mode_wasi,
+        .offset = {.is_some = true, .val = offset_wasi},
+        .size = {.is_some = true, .val = size_wasi},
+    };
+    uint32_t status = wasi_webgpu_webgpu_method_gpu_buffer_map_async(&args, &s->result);
+    return (WGPUFuture){.id = async_register(status, &onMapAsyncDone, s)};
 }
 
 // WGPUStatus wgpuBufferReadMappedRange(WGPUBuffer buffer, size_t offset, void* data, size_t size)
@@ -558,10 +559,10 @@ void wgpuCommandEncoderCopyBufferToBuffer(
     wasi_webgpu_webgpu_method_gpu_command_encoder_copy_buffer_to_buffer(
         wasi_webgpu_webgpu_borrow_gpu_command_encoder(commandEncoder->command_encoder),
         wasi_webgpu_webgpu_borrow_gpu_buffer(source->buffer),
-        sourceOffset,
+        &sourceOffset,
         wasi_webgpu_webgpu_borrow_gpu_buffer(destination->buffer),
-        destinationOffset,
-        size
+        &destinationOffset,
+        &size
     );
 }
 
@@ -713,10 +714,10 @@ void wgpuComputePassEncoderSetBindGroup(
         group_wasi = &group_borrow;
     }
 
-    imports_list_gpu_buffer_dynamic_offset_t offsets_data_val;
-    imports_list_gpu_buffer_dynamic_offset_t* offsets_data_wasi = NULL;
+    wasi_webgpu_webgpu_list_gpu_buffer_dynamic_offset_t offsets_data_val;
+    wasi_webgpu_webgpu_list_gpu_buffer_dynamic_offset_t* offsets_data_wasi = NULL;
     if (dynamicOffsetCount > 0) {
-        offsets_data_val = (imports_list_gpu_buffer_dynamic_offset_t){
+        offsets_data_val = (wasi_webgpu_webgpu_list_gpu_buffer_dynamic_offset_t){
             .ptr = malloc(dynamicOffsetCount * sizeof(wasi_webgpu_webgpu_gpu_buffer_dynamic_offset_t)),
             .len = dynamicOffsetCount,
         };
@@ -823,11 +824,11 @@ WGPUBindGroup wgpuDeviceCreateBindGroup(WGPUDevice device, WGPUBindGroupDescript
             resource.val.gpu_buffer_binding = (wasi_webgpu_webgpu_gpu_buffer_binding_t){
                 .buffer = wasi_webgpu_webgpu_borrow_gpu_buffer(descriptor->entries[i].buffer->buffer),
                 .offset =
-                    (imports_option_gpu_size64_t){
+                    (wasi_webgpu_webgpu_option_gpu_size64_t){
                         .is_some = true,
                         .val = descriptor->entries[i].offset,
                     },
-                .size = (imports_option_gpu_size64_t){
+                .size = (wasi_webgpu_webgpu_option_gpu_size64_t){
                     .is_some = true,
                     .val = descriptor->entries[i].size,
                 },
@@ -883,7 +884,7 @@ WGPUBuffer wgpuDeviceCreateBuffer(WGPUDevice device, WGPUBufferDescriptor const*
 
     if (descriptor) {
         descriptor_wasi.size = descriptor->size;
-        descriptor_wasi.usage = descriptor->usage;
+        descriptor_wasi.usage = bufferUsageNativeToWasi(descriptor->usage);
         descriptor_wasi.label = optionalStringNativeToWasi(&descriptor->label);
         descriptor_wasi.mapped_at_creation = (imports_option_bool_t){
             .is_some = true,
@@ -1258,47 +1259,35 @@ WGPUBool wgpuDeviceHasFeature(WGPUDevice device, WGPUFeatureName feature) {
     );
 }
 
-WGPUFuture wgpuDevicePopErrorScope(WGPUDevice device, WGPUPopErrorScopeCallbackInfo callbackInfo) {
-    if (!device) unreachable();
+typedef struct {
+    wasi_webgpu_webgpu_result_option_own_gpu_error_pop_error_scope_error_t result;
+    WGPUPopErrorScopeCallbackInfo cb;
+} PopErrorScopeState;
 
-    wasi_webgpu_webgpu_option_own_gpu_error_t wasi_popped_error = {};
-    wasi_webgpu_webgpu_pop_error_scope_error_t wasi_pop_error = {};
-    bool success = wasi_webgpu_webgpu_method_gpu_device_pop_error_scope(
-        wasi_webgpu_webgpu_borrow_gpu_device(device->device),
-        &wasi_popped_error,
-        &wasi_pop_error
-    );
+static void onPopErrorScopeDone(void* userdata) {
+    PopErrorScopeState* s = userdata;
+    WGPUPopErrorScopeCallbackInfo cb = s->cb;
 
-    if (!success) {
-        WGPUStringView pop_error_message = stringWasiToNative(&wasi_pop_error.message);
-        callbackInfo.callback(
-            WGPUPopErrorScopeStatus_Error,
-            WGPUErrorType_Unknown,
-            pop_error_message,
-            callbackInfo.userdata1,
-            callbackInfo.userdata2
-        );
+    if (s->result.is_err) {
+        wasi_webgpu_webgpu_pop_error_scope_error_t pop_error = s->result.val.err;
+        WGPUStringView pop_error_message = stringWasiToNative(&pop_error.message);
+        cb.callback(WGPUPopErrorScopeStatus_Error, WGPUErrorType_Unknown, pop_error_message, cb.userdata1, cb.userdata2);
         free((void*)pop_error_message.data);
-        wasi_webgpu_webgpu_pop_error_scope_error_free(&wasi_pop_error);
-        return (WGPUFuture){.id = 0};
+        wasi_webgpu_webgpu_pop_error_scope_error_free(&pop_error);
+        return;
     }
 
-    if (!wasi_popped_error.is_some) {
-        callbackInfo.callback(
-            WGPUPopErrorScopeStatus_Success,
-            WGPUErrorType_NoError,
-            WGPU_STRING_VIEW_INIT,
-            callbackInfo.userdata1,
-            callbackInfo.userdata2
-        );
-        return (WGPUFuture){.id = 0};
+    wasi_webgpu_webgpu_option_own_gpu_error_t popped_error = s->result.val.ok;
+    if (!popped_error.is_some) {
+        cb.callback(WGPUPopErrorScopeStatus_Success, WGPUErrorType_NoError, WGPU_STRING_VIEW_INIT, cb.userdata1, cb.userdata2);
+        return;
     }
 
-    wasi_webgpu_webgpu_borrow_gpu_error_t wasi_popped_error_borrow = wasi_webgpu_webgpu_borrow_gpu_error(wasi_popped_error.val);
+    wasi_webgpu_webgpu_borrow_gpu_error_t popped_error_borrow = wasi_webgpu_webgpu_borrow_gpu_error(popped_error.val);
     wasi_webgpu_webgpu_gpu_error_kind_t kind;
-    wasi_webgpu_webgpu_method_gpu_error_kind(wasi_popped_error_borrow, &kind);
+    wasi_webgpu_webgpu_method_gpu_error_kind(popped_error_borrow, &kind);
     imports_string_t message = {};
-    wasi_webgpu_webgpu_method_gpu_error_message(wasi_popped_error_borrow, &message);
+    wasi_webgpu_webgpu_method_gpu_error_message(popped_error_borrow, &message);
 
     WGPUErrorType error_type;
     switch (kind.tag) {
@@ -1317,18 +1306,25 @@ WGPUFuture wgpuDevicePopErrorScope(WGPUDevice device, WGPUPopErrorScopeCallbackI
     }
 
     WGPUStringView popped_error_message = stringWasiToNative(&message);
-    callbackInfo.callback(
-        WGPUPopErrorScopeStatus_Success,
-        error_type,
-        popped_error_message,
-        callbackInfo.userdata1,
-        callbackInfo.userdata2
-    );
+    cb.callback(WGPUPopErrorScopeStatus_Success, error_type, popped_error_message, cb.userdata1, cb.userdata2);
     free((void*)popped_error_message.data);
 
     imports_string_free(&message);
-    wasi_webgpu_webgpu_gpu_error_drop_own(wasi_popped_error.val);
-    return (WGPUFuture){.id = 0};
+    wasi_webgpu_webgpu_gpu_error_drop_own(popped_error.val);
+}
+
+WGPUFuture wgpuDevicePopErrorScope(WGPUDevice device, WGPUPopErrorScopeCallbackInfo callbackInfo) {
+    if (!device) unreachable();
+
+    PopErrorScopeState* s = malloc(sizeof(PopErrorScopeState));
+    if (!s) oom();
+    s->cb = callbackInfo;
+
+    uint32_t status = wasi_webgpu_webgpu_method_gpu_device_pop_error_scope(
+        wasi_webgpu_webgpu_borrow_gpu_device(device->device),
+        &s->result
+    );
+    return (WGPUFuture){.id = async_register(status, &onPopErrorScopeDone, s)};
 }
 
 void wgpuDevicePushErrorScope(WGPUDevice device, WGPUErrorFilter filter) {
@@ -1384,9 +1380,30 @@ void wgpuDeviceRelease(WGPUDevice device) {
 // {
 // }
 
-// void wgpuInstanceProcessEvents(WGPUInstance instance)
-// {
-// }
+void wgpuInstanceProcessEvents(WGPUInstance instance) {
+    if (!instance) unreachable();
+    async_dispatch_ready();
+}
+
+typedef struct {
+    wasi_webgpu_webgpu_option_own_gpu_adapter_t result;
+    WGPURequestAdapterCallbackInfo cb;
+} RequestAdapterState;
+
+static void onRequestAdapterDone(void* userdata) {
+    RequestAdapterState* s = userdata;
+    WGPURequestAdapterCallbackInfo cb = s->cb;
+    if (!s->result.is_some) {
+        cb.callback(WGPURequestAdapterStatus_Unavailable, NULL, WGPU_STRING_VIEW_INIT, cb.userdata1, cb.userdata2);
+        return;
+    }
+
+    WGPUAdapterImpl* adapter = malloc(sizeof(WGPUAdapterImpl));
+    if (!adapter) oom();
+    adapter->refCount = 1;
+    adapter->adapter = s->result.val;
+    cb.callback(WGPURequestAdapterStatus_Success, adapter, WGPU_STRING_VIEW_INIT, cb.userdata1, cb.userdata2);
+}
 
 WGPUFuture wgpuInstanceRequestAdapter(
     WGPUInstance instance,
@@ -1404,46 +1421,55 @@ WGPUFuture wgpuInstanceRequestAdapter(
     }
     // TODO: set xr_compatible
 
-    wasi_webgpu_webgpu_own_gpu_adapter_t wasi_adapter;
-    bool success = wasi_webgpu_webgpu_method_gpu_request_adapter(
-        wasi_webgpu_webgpu_borrow_gpu(instance->gpu),
-        &wasi_options,
-        &wasi_adapter
-    );
+    RequestAdapterState* s = malloc(sizeof(RequestAdapterState));
+    if (!s) oom();
+    s->cb = callbackInfo;
+
+    wasi_webgpu_webgpu_method_gpu_request_adapter_args_t args = {
+        .self = wasi_webgpu_webgpu_borrow_gpu(instance->gpu),
+        .options = {.is_some = true, .val = wasi_options},
+    };
+    uint32_t status = wasi_webgpu_webgpu_method_gpu_request_adapter(&args, &s->result);
 
     wasi_webgpu_webgpu_gpu_request_adapter_options_free(&wasi_options);
-
-    if (!success) {
-        callbackInfo.callback(
-            WGPURequestAdapterStatus_Unavailable,
-            NULL,
-            WGPU_STRING_VIEW_INIT,
-            callbackInfo.userdata1,
-            callbackInfo.userdata2
-        );
-        return (WGPUFuture){.id = 0};
-    }
-
-    WGPUAdapterImpl* adapter = malloc(sizeof(WGPUAdapterImpl));
-    if (!adapter) oom();
-    adapter->refCount = 1;
-    adapter->adapter = wasi_adapter;
-
-    callbackInfo.callback(
-        WGPURequestAdapterStatus_Success,
-        adapter,
-        WGPU_STRING_VIEW_INIT,
-        callbackInfo.userdata1,
-        callbackInfo.userdata2
-    );
-    return (WGPUFuture){.id = 0};
+    return (WGPUFuture){.id = async_register(status, &onRequestAdapterDone, s)};
 }
 
 WGPUWaitStatus
 wgpuInstanceWaitAny(WGPUInstance instance, size_t futureCount, WGPUFutureWaitInfo* futures, uint64_t timeoutNS) {
-    // TODO: implement futures
-    // For now, the returning function is just calling the callback immediately
-    return WGPUWaitStatus_Success;
+    if (!instance) unreachable();
+
+    for (;;) {
+        // Fire callbacks for everything that has completed so far (non-blocking).
+        async_dispatch_ready();
+
+        bool anyRequestedComplete = false;
+        bool anyRequestedPending = false;
+        for (size_t i = 0; i < futureCount; i++) {
+            uint64_t id = futures[i].future.id;
+            if (id == 0) continue;
+            if (async_future_pending(id)) {
+                anyRequestedPending = true;
+            } else {
+                // Not (or no longer) pending -> it has completed.
+                futures[i].completed = true;
+                anyRequestedComplete = true;
+            }
+        }
+
+        if (anyRequestedComplete || !anyRequestedPending) {
+            return WGPUWaitStatus_Success;
+        }
+        if (timeoutNS == 0) {
+            return WGPUWaitStatus_TimedOut;
+        }
+
+        // A requested future is still pending; block until at least one subtask
+        // completes, then re-check. (Finite timeouts are not yet honored.)
+        if (!async_block_on_any()) {
+            return WGPUWaitStatus_TimedOut; // no progress possible
+        }
+    }
 }
 
 void wgpuInstanceAddRef(WGPUInstance instance) {
@@ -2048,6 +2074,48 @@ static WGPUBufferMapState bufferMapStateWasiToNative(wasi_webgpu_webgpu_gpu_buff
     default:
         unreachable();
     }
+}
+
+// Map flag bits explicitly; webgpu.h and WIT number them independently.
+// TODO: https://github.com/WebAssembly/component-model/issues/662
+static const struct {
+    WGPUBufferUsage native;
+    wasi_webgpu_webgpu_gpu_buffer_usage_t wasi;
+} bufferUsageBits[] = {
+    {WGPUBufferUsage_MapRead, WASI_WEBGPU_WEBGPU_GPU_BUFFER_USAGE_MAP_READ},
+    {WGPUBufferUsage_MapWrite, WASI_WEBGPU_WEBGPU_GPU_BUFFER_USAGE_MAP_WRITE},
+    {WGPUBufferUsage_CopySrc, WASI_WEBGPU_WEBGPU_GPU_BUFFER_USAGE_COPY_SRC},
+    {WGPUBufferUsage_CopyDst, WASI_WEBGPU_WEBGPU_GPU_BUFFER_USAGE_COPY_DST},
+    {WGPUBufferUsage_Index, WASI_WEBGPU_WEBGPU_GPU_BUFFER_USAGE_INDEX},
+    {WGPUBufferUsage_Vertex, WASI_WEBGPU_WEBGPU_GPU_BUFFER_USAGE_VERTEX},
+    {WGPUBufferUsage_Uniform, WASI_WEBGPU_WEBGPU_GPU_BUFFER_USAGE_UNIFORM},
+    {WGPUBufferUsage_Storage, WASI_WEBGPU_WEBGPU_GPU_BUFFER_USAGE_STORAGE},
+    {WGPUBufferUsage_Indirect, WASI_WEBGPU_WEBGPU_GPU_BUFFER_USAGE_INDIRECT},
+    {WGPUBufferUsage_QueryResolve, WASI_WEBGPU_WEBGPU_GPU_BUFFER_USAGE_QUERY_RESOLVE},
+};
+
+static wasi_webgpu_webgpu_gpu_buffer_usage_t bufferUsageNativeToWasi(WGPUBufferUsage usage) {
+    wasi_webgpu_webgpu_gpu_buffer_usage_t wasi = 0;
+    for (size_t i = 0; i < sizeof(bufferUsageBits) / sizeof(*bufferUsageBits); i++) {
+        if (usage & bufferUsageBits[i].native) wasi |= bufferUsageBits[i].wasi;
+    }
+    return wasi;
+}
+
+static WGPUBufferUsage bufferUsageWasiToNative(wasi_webgpu_webgpu_gpu_buffer_usage_t wasi) {
+    WGPUBufferUsage usage = 0;
+    for (size_t i = 0; i < sizeof(bufferUsageBits) / sizeof(*bufferUsageBits); i++) {
+        if (wasi & bufferUsageBits[i].wasi) usage |= bufferUsageBits[i].native;
+    }
+    return usage;
+}
+
+// Map flag bits explicitly; see bufferUsageBits.
+static wasi_webgpu_webgpu_gpu_map_mode_t mapModeNativeToWasi(WGPUMapMode mode) {
+    wasi_webgpu_webgpu_gpu_map_mode_t wasi = 0;
+    if (mode & WGPUMapMode_Read) wasi |= WASI_WEBGPU_WEBGPU_GPU_MAP_MODE_READ;
+    if (mode & WGPUMapMode_Write) wasi |= WASI_WEBGPU_WEBGPU_GPU_MAP_MODE_WRITE;
+    return wasi;
 }
 
 static imports_option_string_t featureLevelNativeToWasi(WGPUFeatureLevel featureLevel) {
