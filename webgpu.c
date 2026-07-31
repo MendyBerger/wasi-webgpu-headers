@@ -138,9 +138,40 @@ WGPUInstance wgpuCreateInstance(WGPUInstanceDescriptor const* descriptor) {
 // {
 // }
 
-// WGPUStatus wgpuAdapterGetInfo(WGPUAdapter adapter, WGPUAdapterInfo* info)
-// {
-// }
+WGPUStatus wgpuAdapterGetInfo(WGPUAdapter adapter, WGPUAdapterInfo* info) {
+    if (!adapter || !info) unreachable();
+
+    wasi_webgpu_webgpu_own_gpu_adapter_info_t info_wasi =
+        wasi_webgpu_webgpu_method_gpu_adapter_info(wasi_webgpu_webgpu_borrow_gpu_adapter(adapter->adapter));
+    wasi_webgpu_webgpu_borrow_gpu_adapter_info_t info_borrow =
+        wasi_webgpu_webgpu_borrow_gpu_adapter_info(info_wasi);
+
+    imports_string_t s;
+    wasi_webgpu_webgpu_method_gpu_adapter_info_vendor(info_borrow, &s);
+    info->vendor = stringWasiToNative(&s);
+    imports_string_free(&s);
+    wasi_webgpu_webgpu_method_gpu_adapter_info_architecture(info_borrow, &s);
+    info->architecture = stringWasiToNative(&s);
+    imports_string_free(&s);
+    wasi_webgpu_webgpu_method_gpu_adapter_info_device(info_borrow, &s);
+    info->device = stringWasiToNative(&s);
+    imports_string_free(&s);
+    wasi_webgpu_webgpu_method_gpu_adapter_info_description(info_borrow, &s);
+    info->description = stringWasiToNative(&s);
+    imports_string_free(&s);
+
+    info->subgroupMinSize = wasi_webgpu_webgpu_method_gpu_adapter_info_subgroup_min_size(info_borrow);
+    info->subgroupMaxSize = wasi_webgpu_webgpu_method_gpu_adapter_info_subgroup_max_size(info_borrow);
+
+    // Not exposed by wasi:webgpu.
+    info->backendType = WGPUBackendType_Undefined;
+    info->adapterType = WGPUAdapterType_Unknown;
+    info->vendorID    = 0;
+    info->deviceID    = 0;
+
+    wasi_webgpu_webgpu_gpu_adapter_info_drop_own(info_wasi);
+    return WGPUStatus_Success;
+}
 
 WGPUStatus wgpuAdapterGetLimits(WGPUAdapter adapter, WGPULimits* limits) {
     if (!adapter || !limits) unreachable();
@@ -1376,9 +1407,62 @@ void wgpuDeviceRelease(WGPUDevice device) {
 // {
 // }
 
-// WGPUBool wgpuInstanceHasWGSLLanguageFeature(WGPUInstance instance, WGPUWGSLLanguageFeatureName feature)
-// {
-// }
+WGPUBool wgpuInstanceHasWGSLLanguageFeature(WGPUInstance instance, WGPUWGSLLanguageFeatureName feature) {
+    if (!instance) unreachable();
+
+    const char* name;
+    switch (feature) {
+    case WGPUWGSLLanguageFeatureName_ReadonlyAndReadwriteStorageTextures:
+        name = "readonly_and_readwrite_storage_textures";
+        break;
+    case WGPUWGSLLanguageFeatureName_Packed4x8IntegerDotProduct:
+        name = "packed_4x8_integer_dot_product";
+        break;
+    case WGPUWGSLLanguageFeatureName_UnrestrictedPointerParameters:
+        name = "unrestricted_pointer_parameters";
+        break;
+    case WGPUWGSLLanguageFeatureName_PointerCompositeAccess:
+        name = "pointer_composite_access";
+        break;
+    case WGPUWGSLLanguageFeatureName_UniformBufferStandardLayout:
+        name = "uniform_buffer_standard_layout";
+        break;
+    case WGPUWGSLLanguageFeatureName_SubgroupId:
+        name = "subgroup_id";
+        break;
+    case WGPUWGSLLanguageFeatureName_SubgroupUniformity:
+        name = "subgroup_uniformity";
+        break;
+    case WGPUWGSLLanguageFeatureName_TextureAndSamplerLet:
+        name = "texture_and_sampler_let";
+        break;
+    case WGPUWGSLLanguageFeatureName_TextureFormatsTier1:
+        name = "texture_formats_tier1";
+        break;
+    case WGPUWGSLLanguageFeatureName_LinearIndexing:
+        name = "linear_indexing";
+        break;
+    // TODO: enable once added to webgpu.h
+    // case WGPUWGSLLanguageFeatureName_ImmediateAddressSpace:
+    //     name = "immediate_address_space";
+    //     break;
+    default:
+        // Not a feature wasi:webgpu hosts advertise.
+        return false;
+    }
+
+    imports_string_t name_wasi = {};
+    imports_string_dup(&name_wasi, name);
+    wasi_webgpu_webgpu_own_wgsl_language_features_t features =
+        wasi_webgpu_webgpu_method_gpu_wgsl_language_features(wasi_webgpu_webgpu_borrow_gpu(instance->gpu));
+    bool has_feature = wasi_webgpu_webgpu_method_wgsl_language_features_has(
+        wasi_webgpu_webgpu_borrow_wgsl_language_features(features),
+        &name_wasi
+    );
+    imports_string_free(&name_wasi);
+    wasi_webgpu_webgpu_wgsl_language_features_drop_own(features);
+    return has_feature;
+}
 
 void wgpuInstanceProcessEvents(WGPUInstance instance) {
     if (!instance) unreachable();
@@ -1538,9 +1622,29 @@ void wgpuQuerySetRelease(WGPUQuerySet querySet) {
     }
 }
 
-// WGPUFuture wgpuQueueOnSubmittedWorkDone(WGPUQueue queue, WGPUQueueWorkDoneCallbackInfo callbackInfo)
-// {
-// }
+typedef struct {
+    WGPUQueueWorkDoneCallbackInfo cb;
+} QueueWorkDoneState;
+
+static void onQueueWorkDone(void* userdata) {
+    QueueWorkDoneState* s = userdata;
+    WGPUQueueWorkDoneCallbackInfo cb = s->cb;
+    // wasi:webgpu's on-submitted-work-done carries no result payload; completion
+    // of the subtask is success.
+    cb.callback(WGPUQueueWorkDoneStatus_Success, WGPU_STRING_VIEW_INIT, cb.userdata1, cb.userdata2);
+}
+
+WGPUFuture wgpuQueueOnSubmittedWorkDone(WGPUQueue queue, WGPUQueueWorkDoneCallbackInfo callbackInfo) {
+    if (!queue) unreachable();
+
+    QueueWorkDoneState* s = malloc(sizeof(QueueWorkDoneState));
+    if (!s) oom();
+    s->cb = callbackInfo;
+
+    uint32_t status = wasi_webgpu_webgpu_method_gpu_queue_on_submitted_work_done(
+        wasi_webgpu_webgpu_borrow_gpu_queue(queue->queue));
+    return (WGPUFuture){.id = async_register(status, &onQueueWorkDone, s)};
+}
 
 // void wgpuQueueSetLabel(WGPUQueue queue, WGPUStringView label)
 // {
@@ -1564,24 +1668,36 @@ void wgpuQueueSubmit(WGPUQueue queue, size_t commandCount, WGPUCommandBuffer con
 void wgpuQueueWriteBuffer(WGPUQueue queue, WGPUBuffer buffer, uint64_t bufferOffset, void const* data, size_t size) {
     if (!queue || !buffer || !data) unreachable();
 
-    imports_list_u8_t data_wasi = {
-        .ptr = (uint8_t*)data,
-        .len = size,
-    };
+    // The host caps how much data a single call may copy between guest and
+    // host (wasmtime's per-hostcall fuel, 128 MiB by default), so split large
+    // writes into chunks; the budget is per hostcall, not cumulative.
+    const size_t kMaxChunk = 16u << 20;
 
-    wasi_webgpu_webgpu_write_buffer_error_t err;
-    bool success = wasi_webgpu_webgpu_method_gpu_queue_write_buffer_with_copy(
-        wasi_webgpu_webgpu_borrow_gpu_queue(queue->queue),
-        wasi_webgpu_webgpu_borrow_gpu_buffer(buffer->buffer),
-        bufferOffset,
-        &data_wasi,
-        NULL, // no data-offset in webgpu.h
-        NULL, // no data-size in webgpu.h
-        &err
-    );
-    if (!success) {
-        wasi_webgpu_webgpu_write_buffer_error_free(&err);
-        todo();
+    size_t written = 0;
+    while (written < size) {
+        size_t chunk = size - written;
+        if (chunk > kMaxChunk) chunk = kMaxChunk;
+
+        imports_list_u8_t data_wasi = {
+            .ptr = (uint8_t*)data + written,
+            .len = chunk,
+        };
+
+        wasi_webgpu_webgpu_write_buffer_error_t err;
+        bool success = wasi_webgpu_webgpu_method_gpu_queue_write_buffer_with_copy(
+            wasi_webgpu_webgpu_borrow_gpu_queue(queue->queue),
+            wasi_webgpu_webgpu_borrow_gpu_buffer(buffer->buffer),
+            bufferOffset + written,
+            &data_wasi,
+            NULL, // no data-offset in webgpu.h
+            NULL, // no data-size in webgpu.h
+            &err
+        );
+        if (!success) {
+            wasi_webgpu_webgpu_write_buffer_error_free(&err);
+            todo();
+        }
+        written += chunk;
     }
 }
 
@@ -1910,9 +2026,11 @@ void wgpuSupportedFeaturesFreeMembers(WGPUSupportedFeatures supportedFeatures) {
 // {
 // }
 
-// void wgpuSurfaceRelease(WGPUSurface surface)
-// {
-// }
+void wgpuSurfaceRelease(WGPUSurface surface) {
+    // Surfaces are not supported (headless); referenced only from C++ wrapper
+    // template instantiations. Nothing to release.
+    (void)surface;
+}
 
 // void wgpuSurfaceCapabilitiesFreeMembers(WGPUSurfaceCapabilities surfaceCapabilities)
 // {
