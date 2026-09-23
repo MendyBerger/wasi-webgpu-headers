@@ -2131,11 +2131,11 @@ void wgpuSupportedFeaturesFreeMembers(WGPUSupportedFeatures supportedFeatures) {
 // {
 // }
 
-void wgpuSurfaceRelease(WGPUSurface surface) {
-    // Surfaces are not supported (headless); referenced only from C++ wrapper
-    // template instantiations. Nothing to release.
-    (void)surface;
-}
+// void wgpuSurfaceRelease(WGPUSurface surface) {
+//     // Surfaces are not supported (headless); referenced only from C++ wrapper
+//     // template instantiations. Nothing to release.
+//     (void)surface;
+// }
 
 // void wgpuSurfaceCapabilitiesFreeMembers(WGPUSurfaceCapabilities surfaceCapabilities)
 // {
